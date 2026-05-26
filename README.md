@@ -1,463 +1,187 @@
 # LLM Agent Distillation
 
-<div align="center">
+Full self-improving long-horizon agent project with a dedicated
+teacher-student distillation path.
 
-![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)
-![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)
-![HuggingFace](https://img.shields.io/badge/HuggingFace-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black)
-![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
+The project compares a baseline LLM agent against a strategy-enhanced agent
+on multi-step filesystem and SQL tasks. Failed runs are logged as traces,
+classified by a failure analyzer, converted into corrective strategies, and
+stored in vector memory for later retrieval. The newer distillation pipeline
+uses a Grok teacher to label failed traces, then fine-tunes a local
+LLaMA-3.2-1B student with QLoRA so failure analysis can run without repeated
+teacher API calls.
 
-**Self-improving LLM agent with Grok-4 knowledge distillation and QLoRA fine-tuning.**
-Three agent strategies benchmarked · ReAct · Plan-Observe · Strategy-Guided
-Grok-4 teacher → QLoRA LLaMA-3.2-1B student → **95% inference cost reduction**
+## What This Repo Contains
 
-</div>
-
----
+- Long-horizon task suite with automatic verifiers.
+- Controlled filesystem and SQLite execution environment.
+- Baseline Plan-Act-Observe agent.
+- Strategy-enhanced agent with ChromaDB strategy memory.
+- Trace logging for every attempted task.
+- Rule-based and LLM-based failure analysis.
+- Grok teacher data generation for failed traces.
+- QLoRA fine-tuning pipeline for a local student failure analyzer.
+- Scripted benchmark that validates the task/environment layer without any API key.
+- Original project report and presentation assets under `docs/`.
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                  THREE AGENT STRATEGIES                     │
-│                                                             │
-│  ReAct (baseline)        Plain Thought→Act→Observe loop     │
-│  Plan-Observe (baseline) Upfront plan + adaptive execution  │
-│  Strategy-Guided (ours)  ChromaDB memory + failure analysis │
-└─────────────────────────────────────────────────────────────┘
-                              │ failures
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                     TRAINING PHASE                          │
-│                                                             │
-│  Failure Traces ──► Grok-4 Teacher ──► JSONL Annotations   │
-│                       (xAI API)       (instruction tuning) │
-│                           │                                 │
-│                           ▼                                 │
-│                 QLoRA Fine-Tuning                           │
-│             LLaMA-3.2-1B-Instruct                           │
-│             4-bit NF4 · LoRA r=8 · ~2% trainable params    │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    INFERENCE PHASE                          │
-│                                                             │
-│  Agent Task ──► Strategy Memory ──► Strategy-Guided Agent  │
-│                      │                                      │
-│                      ▼                                      │
-│           Student Failure Analyzer                          │
-│         (local, no API dependency)                          │
-│         95% cheaper · same quality as teacher               │
-└─────────────────────────────────────────────────────────────┘
+```text
+filesystem / SQL tasks
+        |
+        v
+controlled environment + verifiers
+        |
+        v
+baseline agent ------------------------------+
+                                            |
+strategy-enhanced agent + retrieved memory --+--> execution traces
+                                                   |
+                                                   v
+                                      failure analysis
+                                      | rule checks
+                                      | OpenAI analyzer fallback
+                                      | optional QLoRA student
+                                                   |
+                                                   v
+                                      corrective strategies
+                                                   |
+                                                   v
+                                      ChromaDB strategy memory
+
+Distillation path:
+failed traces -> Grok teacher labels -> JSONL training data
+              -> QLoRA LLaMA-3.2-1B adapter
+              -> local student failure analyzer
 ```
 
----
+## Repository Layout
 
-## Agent Strategies
-
-### ReAct (Baseline)
-Standard Thought → Action → Observation loop. No memory, no failure analysis. Each task starts from scratch.
-
-### Plan-Observe (Baseline)
-Generates an upfront task plan, then executes adaptively. Better at structured tasks but still no cross-run learning.
-
-### Strategy-Guided (Ours)
-Before each step, queries ChromaDB strategy memory for relevant corrective strategies from past failures. Failure analyzer (rule-based + LLM) annotates failures and writes new strategies back to memory. Improves across runs.
-
----
-
-## Results
-
-| Agent Strategy | Task Success | Avg Steps | Cost/Run |
-|----------------|-------------|-----------|----------|
-| ReAct (baseline) | 61% | 14.2 | $0.04 |
-| Plan-Observe (baseline) | 67% | 12.8 | $0.05 |
-| Strategy-Guided (Teacher) | **87%** | **9.8** | $0.18 |
-| Strategy-Guided (Student) | 85% | 10.1 | **$0.009** |
-| **Cost reduction (Student vs Teacher)** | | | **95%** |
-
-*Evaluated on 50 filesystem + 30 database tasks across 3 runs.*
-
----
-
-## Project Structure
-
-```
-LLM_Agent_Distillation/
-├── distillation/
-│   ├── grok_teacher.py      # Grok-4 annotates failure traces → training JSONL
-│   ├── qlora_trainer.py     # QLoRA fine-tunes LLaMA-3.2-1B on annotations
-│   └── student_analyzer.py  # Inference wrapper for the fine-tuned student
-├── agent/
-│   ├── base.py              # Abstract agent interface
-│   ├── baseline.py          # ReAct + Plan-Observe baselines
-│   └── strategy_enhanced.py # Strategy-Guided agent (main contribution)
-├── failure_analysis/
-│   ├── categories.py        # Failure taxonomy (8 categories)
-│   └── analyzer.py          # Rule-based + LLM failure detection
-├── tracing/
-│   └── logger.py            # JSONL execution trace logger
-├── strategy_memory/
-│   └── store.py             # ChromaDB corrective strategy store
-├── environment/
-│   └── controlled.py        # Sandboxed task environment
-├── tasks/
-│   ├── base.py              # Task interface
-│   ├── filesystem.py        # File-organization tasks
-│   └── database.py          # SQL tasks
-├── experiments/
-│   ├── runner.py            # Batch experiment runner
-│   └── metrics.py           # Success rate, step efficiency, cost
-├── main.py
-├── config.py
-└── requirements.txt
+```text
+agent/                 Agent interfaces and baseline/strategy-enhanced agents
+distillation/          Grok teacher, QLoRA trainer, local student analyzer
+environment/           Controlled task execution environment
+experiments/           Experiment runner, metrics, and plotting
+failure_analysis/      Failure taxonomy and analyzer
+strategy_memory/       ChromaDB-backed corrective strategy retrieval
+tasks/                 Filesystem and database task definitions/verifiers
+tracing/               JSON trace logger
+docs/                  Project report and presentation assets
+bench_scripted.py      No-API benchmark for environment and task correctness
+config.py              Runtime paths, model names, and feature flags
+main.py                CLI entrypoint for LLM experiments
+requirements.txt       Base project dependencies
+requirements-distillation.txt
+                       Optional QLoRA training dependencies
 ```
 
----
-
-## Quickstart
+## Setup
 
 ```bash
-git clone https://github.com/Ajeenckya5/LLM_Agent_Distillation
+git clone https://github.com/Ajeenckya5/LLM_Agent_Distillation.git
 cd LLM_Agent_Distillation
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # add XAI_API_KEY
+cp .env.example .env
 ```
 
-### 1 — Run all three agents and compare
+Add keys to `.env` only for the workflows that need them:
+
+```text
+OPENAI_API_KEY=...
+XAI_API_KEY=...
+```
+
+## Validate Without API Keys
+
+Run the deterministic scripted benchmark:
 
 ```bash
-python main.py --mode evaluate --tasks filesystem database --runs 50
-# Compares ReAct, Plan-Observe, and Strategy-Guided automatically
-# Results saved to results/
+python bench_scripted.py
 ```
 
-### 2 — Generate distillation data with Grok-4 teacher
+This exercises all six current tasks, the controlled environment, task
+verifiers, and strategy-memory retrieval without calling an LLM.
+
+## Run LLM Experiments
+
+```bash
+python main.py run --attempts 2 --max-steps 15
+```
+
+Useful options:
+
+```bash
+python main.py run --no-plot
+python main.py run --output results
+python main.py run --sandbox-dir /tmp/agent_sandbox
+```
+
+The runner executes the baseline agent first. Failed traces are analyzed and
+converted into strategies, then the strategy-enhanced agent retrieves the most
+relevant strategies before attempting similar tasks.
+
+## Distillation Pipeline
+
+Install optional training dependencies in a CUDA-capable environment:
+
+```bash
+pip install -r requirements-distillation.txt
+```
+
+Generate teacher labels from failed traces:
 
 ```bash
 python -m distillation.grok_teacher \
-  --traces-dir results/traces/ \
+  --traces-dir traces \
   --out data/distill_train.jsonl \
   --max-traces 500
 ```
 
-### 3 — Fine-tune the student with QLoRA
+Fine-tune the local student with QLoRA:
 
 ```bash
 python -m distillation.qlora_trainer \
   --data data/distill_train.jsonl \
   --output models/failure_analyzer_lora \
   --epochs 3
-# Trainable params: ~2% of LLaMA-3.2-1B
 ```
 
-### 4 — Run with local student (no API cost at inference)
+Use the student analyzer at runtime:
 
 ```bash
-python main.py --mode evaluate --analyzer student \
-  --adapter models/failure_analyzer_lora
+USE_STUDENT_ANALYZER=1 python main.py run
 ```
 
----
+If `USE_STUDENT_ANALYZER=1` is not set, or if the adapter is missing, the
+runner falls back to the standard `FailureAnalyzer`.
 
-## Distillation Details
+## Failure Categories
 
-### Teacher: Grok-4 (xAI API)
+The base analyzer classifies failed traces into:
 
-Annotates each failed trace:
-```json
-{
-  "category": "tool_usage_error",
-  "corrective_strategy": "Always call list_dir before moving files to confirm filenames exist.",
-  "root_cause": "Agent assumed file existed without verification"
-}
-```
+- `planning_error`
+- `memory_limitation`
+- `instruction_misinterpretation`
+- `environmental_change`
+- `false_assumption`
 
-Failure categories: `tool_usage_error` · `reasoning_error` · `environment_misread` · `loop_detected` · `path_error` · `schema_error` · `constraint_violation` · `timeout`
+The distillation teacher prompt also supports more operational labels such as
+`tool_usage_error`, `path_error`, `schema_error`, `constraint_violation`, and
+`timeout` for richer student training examples.
 
-### Student: LLaMA-3.2-1B-Instruct + QLoRA
+## Generated Files
 
-| Component | Config |
-|-----------|--------|
-| Base model | `meta-llama/Llama-3.2-1B-Instruct` |
-| Quantization | 4-bit NF4 (bitsandbytes) |
-| LoRA rank | r=8, α=32 |
-| Target modules | q_proj, v_proj, k_proj, o_proj |
-| Optimizer | paged_adamw_8bit |
-| Trainable params | ~2% of total (~20M) |
+The following runtime artifacts are intentionally ignored:
 
----
+- `.env`
+- `sandbox/`
+- `traces/`
+- `results/`
+- `chroma_db/`
+- `models/`
+- `data/*.jsonl`
+- Python cache files
 
-## Strategy Memory
-
-```python
-from strategy_memory.store import StrategyMemory
-
-memory = StrategyMemory()
-memory.add(category="path_error", strategy="Verify path with stat before write")
-relevant = memory.retrieve(query="file not found during copy", k=3)
-```
-
-ChromaDB vector store — strategies persist across runs and improve retrieval quality as more failures are analyzed.
-
----
-
-## Requirements
-
-```
-torch>=2.1
-transformers>=4.40
-peft>=0.10
-trl>=0.8
-bitsandbytes>=0.43
-accelerate>=0.28
-datasets>=2.18
-chromadb>=0.4
-```
-
-GPU ≥8 GB VRAM recommended for QLoRA training. CPU inference works but is slow.
-
----
-
-## Tech Stack
-
-`Python 3.10+` · `PyTorch` · `HuggingFace Transformers` · `PEFT` · `TRL` · `bitsandbytes` · `ChromaDB` · `xAI Grok-4 API` · `SQLite`
-
----
-
-<div align="center">
-
-*"Distill the teacher's judgment into a model you own. Ship faster, spend less."*
-
-</div># LLM Agent Distillation
-
-<div align="center">
-
-![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)
-![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)
-![HuggingFace](https://img.shields.io/badge/HuggingFace-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black)
-![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
-
-**Self-improving LLM agent with a Grok-4 teacher → QLoRA-fine-tuned LLaMA-3.2-1B student pipeline. Reduces inference cost by ~95% while retaining failure-analysis quality.**
-
-# LLM Agent Distillation
-
-<div align="center">
-
-![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)
-![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)
-![HuggingFace](https://img.shields.io/badge/HuggingFace-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black)
-![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
-
-**Self-improving LLM agent with a Grok-4 teacher → QLoRA-fine-tuned LLaMA-3.2-1B student pipeline.
-Reduces inference cost by ~95% while retaining failure-analysis quality.**
-
-</div>
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     TRAINING PHASE                          │
-│                                                             │
-│  Agent Traces ──► Grok-4 Teacher ──► JSONL Annotations     │
-│  (failures)        (xAI API)         (instruction tuning)  │
-│                         │                                   │
-│                         ▼                                   │
-│              QLoRA Fine-Tuning                              │
-│          LLaMA-3.2-1B-Instruct                              │
-│          4-bit NF4 · LoRA r=8                               │
-│          ~2% trainable params                               │
-└─────────────────────────────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    INFERENCE PHASE                          │
-│                                                             │
-│  Agent Task ──► Strategy Memory ──► Enhanced Agent          │
-│                      │                                      │
-│                      ▼                                      │
-│           Student Failure Analyzer                          │
-│         (local, no API dependency)                          │
-│         95% cheaper · same quality                          │
-└─────────────────────────────────────────────────────────────┘
-```
-
-## What It Does
-
-1. **Runs an agent** on filesystem and database tasks in a controlled sandbox
-2. **Traces failures** — logs every action, observation, and reasoning step
-3. **Distills from Grok-4** — the teacher annotates each failure trace with a root-cause category and a concrete corrective strategy
-4. **Fine-tunes a local student** — QLoRA trains LLaMA-3.2-1B on the annotated JSONL with 4-bit NF4 quantization
-5. **Deploys the student** — at inference, the student model replaces the Grok-4 API call, cutting cost by ~95%
-
-The agent improves across runs: each failure adds a corrective strategy to a persistent ChromaDB strategy memory, and the fine-tuned student gets sharper over time.
-
----
-
-## Project Structure
-
-```
-LLM_Agent_Distillation/
-├── distillation/
-│   ├── grok_teacher.py      # Grok-4 annotates failure traces → training JSONL
-│   ├── qlora_trainer.py     # QLoRA fine-tunes LLaMA-3.2-1B on annotations
-│   └── student_analyzer.py  # Inference wrapper for the fine-tuned student
-├── agent/
-│   ├── base.py              # Abstract agent interface
-│   ├── baseline.py          # Baseline ReAct agent
-│   └── strategy_enhanced.py # Agent with strategy-memory lookup
-├── failure_analysis/
-│   ├── categories.py        # Failure taxonomy
-│   └── analyzer.py          # Rule-based + LLM-based failure detection
-├── tracing/
-│   └── logger.py            # Execution trace logger (JSONL)
-├── strategy_memory/
-│   └── store.py             # ChromaDB-backed corrective strategy memory
-├── environment/
-│   └── controlled.py        # Sandboxed task environment
-├── tasks/
-│   ├── base.py              # Task interface
-│   ├── filesystem.py        # File-organization tasks
-│   └── database.py          # SQL tasks
-├── experiments/
-│   ├── runner.py            # Batch experiment runner
-│   └── metrics.py           # Success rate, step efficiency, cost metrics
-├── main.py                  # CLI entrypoint
-├── config.py                # Configuration
-└── requirements.txt
-```
-
----
-
-## Quickstart
-
-```bash
-git clone https://github.com/Ajeenckya5/LLM_Agent_Distillation
-cd LLM_Agent_Distillation
-pip install -r requirements.txt
-cp .env.example .env   # add XAI_API_KEY
-```
-
-### 1 — Run the agent and collect failure traces
-
-```bash
-python main.py --mode evaluate --tasks filesystem database --runs 50
-# Traces saved to traces/
-```
-
-### 2 — Generate distillation data with Grok-4 teacher
-
-```bash
-python -m distillation.grok_teacher \
-  --traces-dir traces/ \
-  --out data/distill_train.jsonl \
-  --max-traces 500
-```
-
-### 3 — Fine-tune the student with QLoRA
-
-```bash
-python -m distillation.qlora_trainer \
-  --data data/distill_train.jsonl \
-  --output models/failure_analyzer_lora \
-  --epochs 3
-# Trainable params: ~2% of LLaMA-3.2-1B (~20M / 1B)
-```
-
-### 4 — Run with the local student model
-
-```bash
-python main.py --mode evaluate --analyzer student \
-  --adapter models/failure_analyzer_lora
-```
-
----
-
-## Results
-
-| Metric | Baseline Agent | Strategy-Enhanced (Teacher) | Strategy-Enhanced (Student) |
-|--------|---------------|----------------------------|----------------------------|
-| Task success rate | 61% | 87% | 85% |
-| Avg steps to completion | 14.2 | 9.8 | 10.1 |
-| Inference cost / run | $0.04 | $0.18 | $0.009 |
-| **Cost reduction vs teacher** | — | — | **95%** |
-
-*Evaluated on 50 filesystem + 30 database tasks across 3 runs.*
-
----
-
-## Distillation Pipeline Details
-
-### Teacher: Grok-4 (xAI API)
-
-Annotates each failed trace with:
-```json
-{
-  "category": "tool_usage_error",
-  "corrective_strategy": "Always call list_dir before moving files to confirm filenames exist.",
-  "root_cause": "Agent assumed file existed without verification"
-}
-```
-
-Failure categories: `tool_usage_error · reasoning_error · environment_misread · loop_detected · path_error · schema_error · constraint_violation · timeout`
-
-### Student: LLaMA-3.2-1B-Instruct + QLoRA
-
-| Component | Config |
-|-----------|--------|
-| Base model | `meta-llama/Llama-3.2-1B-Instruct` |
-| Quantization | 4-bit NF4 (bitsandbytes) |
-| LoRA rank | r=8, α=32 |
-| Target modules | q_proj, v_proj, k_proj, o_proj |
-| Optimizer | paged_adamw_8bit |
-| Trainable params | ~2% of total (~20M) |
-| Training data | 200–500 distilled failure examples |
-
----
-
-## Strategy Memory
-
-Corrective strategies are stored in a ChromaDB vector store keyed by failure embedding. At inference, the strategy-enhanced agent retrieves the most relevant past strategy before each step.
-
-```python
-from strategy_memory.store import StrategyMemory
-
-memory = StrategyMemory()
-memory.add(category="path_error", strategy="Verify path with stat before write")
-relevant = memory.retrieve(query="file not found during copy", k=3)
-```
-
----
-
-## Tech Stack
-
-`Python 3.10+` · `PyTorch` · `HuggingFace Transformers` · `PEFT` · `TRL` · `bitsandbytes` · `ChromaDB` · `xAI Grok-4 API` · `SQLite`
-
----
-
-## Requirements
-
-```
-torch>=2.1
-transformers>=4.40
-peft>=0.10
-trl>=0.8
-bitsandbytes>=0.43
-accelerate>=0.28
-datasets>=2.18
-chromadb>=0.4
-```
-
-GPU with ≥8 GB VRAM recommended for QLoRA training. CPU inference works but is slow.
-
----
-
-<div align="center">
-
-*"Distill the teacher's judgment into a model you own. Ship faster, spend less."*
-
-</div></div>
+This keeps the repo focused on reproducible source code and documentation.

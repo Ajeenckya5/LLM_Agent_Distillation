@@ -1,0 +1,14 @@
+.DS_Store
+.env
+.venv/
+chroma_db/
+sandbox/
+traces/
+results/
+models/
+data/
+data/*.jsonl
+*.pyc
+__pycache__/
+.pytest_cache/
+*.egg-info/
