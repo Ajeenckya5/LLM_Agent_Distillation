@@ -1,0 +1,84 @@
+# Active profile: "xai" | "haiku" | "groq" | "ollama"
+# Override with --profile <name> on CLI, or change active_profile here.
+active_profile: "xai"
+
+model_profiles:
+  xai:
+    primary: "grok-4.20-reasoning"
+    analyzer: "grok-4.20-reasoning"
+    judge: "grok-4.20-reasoning"
+    backend: "xai"
+  haiku:
+    primary: "claude-haiku-4-5-20251001"
+    analyzer: "claude-haiku-4-5-20251001"
+    judge: "claude-haiku-4-5-20251001"
+    backend: "anthropic"
+  groq:
+    primary: "llama-3.1-8b-instant"
+    analyzer: "llama-3.1-8b-instant"
+    judge: "llama-3.1-8b-instant"
+    backend: "groq"
+  ollama:
+    primary: "llama3"
+    analyzer: "llama3"
+    judge: "llama3"
+    backend: "ollama"
+
+# Resolved at runtime from active_profile — do not edit directly
+model:
+  primary: "grok-4.20-reasoning"
+  analyzer: "grok-4.20-reasoning"
+  judge: "grok-4.20-reasoning"
+  embedding: "all-MiniLM-L6-v2"
+  backend: "xai"
+
+agent:
+  max_steps: 25
+  temperature: 0.7
+  max_tokens: 1000
+
+memory:
+  db_path: "results/strategy_memory.db"
+  top_k: 3
+  similarity_threshold: 0.80
+
+evaluation:
+  horizons: [8, 12, 16, 20]
+  n_tasks_per_horizon: 25
+  benchmarks: ["agentbench_os", "webarena"]
+  baselines: ["react", "plan_act", "no_memory"]
+
+analysis:
+  failure_analyzer: "llm"          # llm | heuristic | student
+  failure_prompt: "failure_analysis.txt"
+  strategy_prompt: "strategy_gen.txt"
+  judge_prompt: "evaluation_judge.txt"
+  judge_model: "grok-4.20-reasoning"
+  prompt_ablation_conditions:
+    full_grounded:
+      analyzer: "llm"
+      failure_prompt: "failure_analysis.txt"
+      strategy_prompt: "strategy_gen.txt"
+    no_observation_failure_prompt:
+      analyzer: "llm"
+      failure_prompt: "failure_analysis_no_observations.txt"
+      strategy_prompt: "strategy_gen.txt"
+    generic_strategy_prompt:
+      analyzer: "llm"
+      failure_prompt: "failure_analysis.txt"
+      strategy_prompt: "strategy_gen_generic.txt"
+    heuristic_analyzer:
+      analyzer: "heuristic"
+      strategy_prompt: "strategy_gen.txt"
+
+logging:
+  llm_calls_log: "results/llm_calls.jsonl"
+  level: "INFO"
+
+distillation:
+  teacher_model: "grok-4"
+  student_base_model: "meta-llama/Llama-3.2-1B-Instruct"
+  student_adapter_path: "models/failure_analyzer_lora"
+  distill_data_path: "data/distill_train.jsonl"
+  max_new_tokens: 256
+  temperature: 0.1

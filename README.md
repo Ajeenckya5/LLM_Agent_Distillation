@@ -1,128 +1,79 @@
 # LLM Agent Distillation
 
-Full self-improving long-horizon agent project with a dedicated
-teacher-student distillation path.
+Full self-improving LLM agent project for long-horizon tasks, with the
+dedicated Grok teacher -> QLoRA student distillation pipeline included in the
+same clean repository.
 
-The project compares a baseline LLM agent against a strategy-enhanced agent
-on multi-step filesystem and SQL tasks. Failed runs are logged as traces,
-classified by a failure analyzer, converted into corrective strategies, and
-stored in vector memory for later retrieval. The newer distillation pipeline
-uses a Grok teacher to label failed traces, then fine-tunes a local
-LLaMA-3.2-1B student with QLoRA so failure analysis can run without repeated
-teacher API calls.
+The base system learns from failed task executions without retraining the main
+agent. It records traces, analyzes failures, generates corrective strategies,
+stores them in persistent memory, and retrieves relevant strategies for future
+tasks. The distillation path adds a local student failure analyzer so repeated
+failure-analysis calls can be served by a fine-tuned adapter instead of a
+teacher API call.
 
-## What This Repo Contains
+## What This Project Does
 
-- Long-horizon task suite with automatic verifiers.
-- Controlled filesystem and SQLite execution environment.
-- Baseline Plan-Act-Observe agent.
-- Strategy-enhanced agent with ChromaDB strategy memory.
-- Trace logging for every attempted task.
-- Rule-based and LLM-based failure analysis.
-- Grok teacher data generation for failed traces.
-- QLoRA fine-tuning pipeline for a local student failure analyzer.
-- Scripted benchmark that validates the task/environment layer without any API key.
-- Original project report and presentation assets under `docs/`.
+- Runs three agent strategies: ReAct, Plan-and-Act, and Strategy-Guided.
+- Evaluates long-horizon filesystem, database, OS, WebArena-style, and Terminal-Bench tasks.
+- Logs execution traces and labels failures.
+- Stores corrective strategies in persistent memory with semantic retrieval.
+- Runs prompt/evaluator ablations for failure analysis and strategy generation.
+- Generates Grok-labeled distillation data from failed traces.
+- Fine-tunes a LLaMA-3.2-1B student with QLoRA.
+- Lets the runtime use the student analyzer through `analysis.failure_analyzer: "student"` or `USE_STUDENT_ANALYZER=1`.
 
-## Architecture
-
-```text
-filesystem / SQL tasks
-        |
-        v
-controlled environment + verifiers
-        |
-        v
-baseline agent ------------------------------+
-                                            |
-strategy-enhanced agent + retrieved memory --+--> execution traces
-                                                   |
-                                                   v
-                                      failure analysis
-                                      | rule checks
-                                      | OpenAI analyzer fallback
-                                      | optional QLoRA student
-                                                   |
-                                                   v
-                                      corrective strategies
-                                                   |
-                                                   v
-                                      ChromaDB strategy memory
-
-Distillation path:
-failed traces -> Grok teacher labels -> JSONL training data
-              -> QLoRA LLaMA-3.2-1B adapter
-              -> local student failure analyzer
-```
-
-## Repository Layout
-
-```text
-agent/                 Agent interfaces and baseline/strategy-enhanced agents
-distillation/          Grok teacher, QLoRA trainer, local student analyzer
-environment/           Controlled task execution environment
-experiments/           Experiment runner, metrics, and plotting
-failure_analysis/      Failure taxonomy and analyzer
-strategy_memory/       ChromaDB-backed corrective strategy retrieval
-tasks/                 Filesystem and database task definitions/verifiers
-tracing/               JSON trace logger
-docs/                  Project report and presentation assets
-bench_scripted.py      No-API benchmark for environment and task correctness
-config.py              Runtime paths, model names, and feature flags
-main.py                CLI entrypoint for LLM experiments
-requirements.txt       Base project dependencies
-requirements-distillation.txt
-                       Optional QLoRA training dependencies
-```
-
-## Setup
+## Quick Start
 
 ```bash
 git clone https://github.com/Ajeenckya5/LLM_Agent_Distillation.git
 cd LLM_Agent_Distillation
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r self_improving_agent/requirements.txt
 cp .env.example .env
 ```
 
-Add keys to `.env` only for the workflows that need them:
-
-```text
-OPENAI_API_KEY=...
-XAI_API_KEY=...
-```
-
-## Validate Without API Keys
-
-Run the deterministic scripted benchmark:
+Set one backend in `.env`:
 
 ```bash
-python bench_scripted.py
+XAI_API_KEY=xai-your-key
+# or OPENAI_API_KEY=...
+# or ANTHROPIC_API_KEY=...
+# or OLLAMA_BASE_URL=http://localhost:11434
+# or MOCK_LLM=1 for tests/smoke runs
 ```
 
-This exercises all six current tasks, the controlled environment, task
-verifiers, and strategy-memory retrieval without calling an LLM.
+## Run Experiments
 
-## Run LLM Experiments
+Controlled filesystem/database tasks:
 
 ```bash
-python main.py run --attempts 2 --max-steps 15
+python main.py run --dry-run
+python main.py run --attempts 1 -o results
 ```
 
-Useful options:
+AgentBench OS tasks:
 
 ```bash
-python main.py run --no-plot
-python main.py run --output results
-python main.py run --sandbox-dir /tmp/agent_sandbox
+python main.py agentbench --dry-run
+python main.py agentbench --n-tasks 100
 ```
 
-The runner executes the baseline agent first. Failed traces are analyzed and
-converted into strategies, then the strategy-enhanced agent retrieves the most
-relevant strategies before attempting similar tasks.
+Terminal-Bench:
 
-## Distillation Pipeline
+```bash
+python main.py terminalbench --n-tasks 10 --n-concurrent 2
+```
+
+Ablation and prompt evaluation:
+
+```bash
+python main.py ablation --dry-run
+python main.py member2-eval --profile xai
+python main.py member2-ablation --profile xai
+```
+
+## Distillation And QLoRA
 
 Install optional training dependencies in a CUDA-capable environment:
 
@@ -133,55 +84,119 @@ pip install -r requirements-distillation.txt
 Generate teacher labels from failed traces:
 
 ```bash
-python -m distillation.grok_teacher \
-  --traces-dir traces \
+python -m self_improving_agent.distillation.grok_teacher \
+  --traces-dir results \
   --out data/distill_train.jsonl \
   --max-traces 500
 ```
 
-Fine-tune the local student with QLoRA:
+Fine-tune the local student:
 
 ```bash
-python -m distillation.qlora_trainer \
+python -m self_improving_agent.distillation.qlora_trainer \
   --data data/distill_train.jsonl \
   --output models/failure_analyzer_lora \
   --epochs 3
 ```
 
-Use the student analyzer at runtime:
+Use the student analyzer:
 
 ```bash
-USE_STUDENT_ANALYZER=1 python main.py run
+USE_STUDENT_ANALYZER=1 python main.py run --dry-run
 ```
 
-If `USE_STUDENT_ANALYZER=1` is not set, or if the adapter is missing, the
-runner falls back to the standard `FailureAnalyzer`.
+Equivalent config:
 
-## Failure Categories
+```yaml
+analysis:
+  failure_analyzer: "student"
 
-The base analyzer classifies failed traces into:
+distillation:
+  student_adapter_path: "models/failure_analyzer_lora"
+```
 
-- `planning_error`
-- `memory_limitation`
-- `instruction_misinterpretation`
-- `environmental_change`
-- `false_assumption`
+If the student adapter is not trained yet, keep `analysis.failure_analyzer` set
+to `llm` or `heuristic`.
 
-The distillation teacher prompt also supports more operational labels such as
-`tool_usage_error`, `path_error`, `schema_error`, `constraint_violation`, and
-`timeout` for richer student training examples.
+## Project Structure
 
-## Generated Files
+```text
+LLM_Agent_Distillation/
+├── main.py                         Unified CLI entry point
+├── requirements-distillation.txt   Optional QLoRA dependencies
+├── self_improving_agent/
+│   ├── agent/                      ReAct, Plan-and-Act, Strategy-Guided agents
+│   ├── analysis/                   Heuristic and LLM failure analysis
+│   ├── distillation/               Grok teacher, QLoRA trainer, student analyzer
+│   ├── memory/                     SQLite strategy memory and semantic retriever
+│   ├── environments/               OS, controlled, and web environments
+│   ├── evaluation/                 Metrics, plots, experiment loop
+│   ├── experiments/                AgentBench, WebArena, Terminal-Bench, ablations
+│   ├── prompts/                    Failure-analysis and strategy prompts
+│   ├── tasks/                      Controlled filesystem/database task suite
+│   ├── tests/                      Pytest suite with mock LLM support
+│   └── config.yaml                 Model profiles and experiment settings
+└── fangkai/                        Additional mock-agent experiments
+```
 
-The following runtime artifacts are intentionally ignored:
+## Tests
+
+No API keys are needed for the test suite:
+
+```bash
+MOCK_LLM=1 python -m pytest self_improving_agent/tests/ -v
+```
+
+Compile check:
+
+```bash
+python -m compileall main.py self_improving_agent fangkai
+```
+
+## Configuration
+
+Edit `self_improving_agent/config.yaml` to change:
+
+- Active model profile: `xai`, `haiku`, `groq`, or `ollama`.
+- Agent settings: `max_steps`, `temperature`, `max_tokens`.
+- Memory settings: `top_k`, `similarity_threshold`, database path.
+- Analysis mode: `llm`, `heuristic`, or `student`.
+- Distillation paths: teacher model, base model, adapter output, training JSONL.
+
+## Runtime Outputs
+
+Generated files are intentionally ignored:
 
 - `.env`
 - `sandbox/`
-- `traces/`
 - `results/`
-- `chroma_db/`
+- `traces/`
+- `logs/`
 - `models/`
-- `data/*.jsonl`
-- Python cache files
+- `data/`
+- local SQLite databases and model checkpoints
 
-This keeps the repo focused on reproducible source code and documentation.
+## References
+
+```bibtex
+@inproceedings{madaan2023selfrefine,
+  title={{SELF-REFINE}: Iterative Refinement with Self-Feedback},
+  author={Madaan, Aman and Tandon, Niket and Gupta, Prakhar and others},
+  booktitle={Advances in Neural Information Processing Systems},
+  year={2023}
+}
+
+@article{liu2023agentbench,
+  title={{AgentBench}: Evaluating LLMs as Agents},
+  author={Liu, Xiao and Yu, Hao and Zhang, Hanchen and others},
+  journal={arXiv preprint arXiv:2308.03688},
+  year={2023}
+}
+
+@inproceedings{zhou2024webarena,
+  title={{WebArena}: A Realistic Web Environment for Building Autonomous Agents},
+  author={Zhou, Shuyan and Xu, Frank F and Zhu, Hao and others},
+  booktitle={International Conference on Learning Representations},
+  year={2024}
+}
+```

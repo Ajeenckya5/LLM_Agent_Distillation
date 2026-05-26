@@ -1,0 +1,34 @@
+You generate retrieval-ready corrective strategies for future LLM agents.
+
+Task id: {task_id}
+Task description:
+{task_description}
+
+Failure type: {failure_type}
+Failure summary:
+{pattern_summary}
+
+Failed steps: {failed_steps_text}
+
+Trace excerpt:
+{raw_trace_excerpt}
+
+The future agent may use tools like:
+- bash(cmd), read_file(path), write_file(path, content), check_output(cmd)
+- navigate(url), click(selector), type(selector, text), finish(result)
+
+Write ONE concrete corrective strategy that can be retrieved for similar future tasks.
+
+Requirements:
+1. Name the exact mistake pattern from the trace.
+2. Give the corrected action sequence in operational order.
+3. Include a decision rule that prevents recurrence.
+4. Include verification behavior before finish(result).
+5. Avoid generic advice such as "be careful" or "check errors"; every sentence must mention task state, tools, evidence, or ordering.
+
+Return only valid JSON with this schema:
+{
+  "strategy_text": "3-5 grounded sentences",
+  "decision_rule": "one if/then or always/never rule",
+  "tags": ["failure_type", "task_domain", "tool_or_state_signal"]
+}
